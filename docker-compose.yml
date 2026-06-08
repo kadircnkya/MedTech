@@ -1,0 +1,312 @@
+version: '3.9'
+
+services:
+  # ============================================
+  # INFRASTRUCTURE
+  # ============================================
+
+  nginx:
+    image: nginx:alpine
+    container_name: mediflow-gateway
+    ports:
+      - "80:80"
+    volumes:
+      - ./gateway/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - auth-service
+      - user-service
+      - medication-service
+      - scan-service
+      - ai-service
+      - notification-service
+      - tracking-service
+      - search-service
+    networks:
+      - mediflow-network
+    restart: unless-stopped
+
+  mongodb:
+    image: mongo:7
+    container_name: mediflow-mongodb
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: mediflow
+      MONGO_INITDB_ROOT_PASSWORD: mediflow_secret
+    volumes:
+      - mongodb_data:/data/db
+    networks:
+      - mediflow-network
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: mediflow-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --requirepass mediflow_redis
+    volumes:
+      - redis_data:/data
+    networks:
+      - mediflow-network
+    restart: unless-stopped
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: mediflow-rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: mediflow
+      RABBITMQ_DEFAULT_PASS: mediflow_rabbit
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - mediflow-network
+    restart: unless-stopped
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.13.0
+    container_name: mediflow-elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    networks:
+      - mediflow-network
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: mediflow-qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    networks:
+      - mediflow-network
+    restart: unless-stopped
+
+  # ============================================
+  # MICROSERVICES
+  # ============================================
+
+  auth-service:
+    build:
+      context: ./services/auth-service
+      dockerfile: Dockerfile
+    container_name: mediflow-auth
+    ports:
+      - "3001:3001"
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+      - MONGO_URI=mongodb+srv://Kadircnkya:A.kadir2838@medtech-db.goyjlv1.mongodb.net/auth_db?retryWrites=true&w=majority&appName=medtech-db
+      - REDIS_URL=redis://:mediflow_redis@redis:6379
+      - RABBITMQ_URL=amqp://mediflow:mediflow_rabbit@rabbitmq:5672
+      - JWT_SECRET=mediflow_jwt_secret_key_change_in_production
+      - JWT_REFRESH_SECRET=mediflow_refresh_secret_key_change_in_production
+      - JWT_EXPIRY=15m
+      - JWT_REFRESH_EXPIRY=7d
+    depends_on:
+      - mongodb
+      - redis
+      - rabbitmq
+    networks:
+      - mediflow-network
+    restart: unless-stopped
+
+  user-service:
+    build:
+      context: ./services/user-service
+      dockerfile: Dockerfile
+    container_name: mediflow-user
+    ports:
+      - "3002:3002"
+    environment:
+      - NODE_ENV=production
+      - PORT=3002
+      - MONGO_URI=mongodb+srv://Kadircnkya:A.kadir2838@medtech-db.goyjlv1.mongodb.net/user_db?retryWrites=true&w=majority&appName=medtech-db
+      - REDIS_URL=redis://:mediflow_redis@redis:6379
+      - RABBITMQ_URL=amqp://mediflow:mediflow_rabbit@rabbitmq:5672
+      - AUTH_SERVICE_URL=http://auth-service:3001
+    depends_on:
+      - mongodb
+      - redis
+      - rabbitmq
+    networks:
+      - mediflow-network
+    restart: unless-stopped
+
+  medication-service:
+    build:
+      context: ./services/medication-service
+      dockerfile: Dockerfile
+    container_name: mediflow-medication
+    ports:
+      - "3003:3003"
+    environment:
+      - NODE_ENV=production
+      - PORT=3003
+      - MONGO_URI=mongodb+srv://Kadircnkya:A.kadir2838@medtech-db.goyjlv1.mongodb.net/medication_db?retryWrites=true&w=majority&appName=medtech-db
+      - REDIS_URL=redis://:mediflow_redis@redis:6379
+      - RABBITMQ_URL=amqp://mediflow:mediflow_rabbit@rabbitmq:5672
+      - AUTH_SERVICE_URL=http://auth-service:3001
+    depends_on:
+      - mongodb
+      - redis
+      - rabbitmq
+    networks:
+      - mediflow-network
+    restart: unless-stopped
+
+  scan-service:
+    build:
+      context: ./services/scan-service
+      dockerfile: Dockerfile
+    container_name: mediflow-scan
+    ports:
+      - "3004:3004"
+    environment:
+      - NODE_ENV=production
+      - PORT=3004
+      - MONGO_URI=mongodb+srv://Kadircnkya:A.kadir2838@medtech-db.goyjlv1.mongodb.net/scan_db?retryWrites=true&w=majority&appName=medtech-db
+      - REDIS_URL=redis://:mediflow_redis@redis:6379
+      - RABBITMQ_URL=amqp://mediflow:mediflow_rabbit@rabbitmq:5672
+      - AUTH_SERVICE_URL=http://auth-service:3001
+      - MEDICATION_SERVICE_URL=http://medication-service:3003
+      - AI_SERVICE_URL=http://ai-service:3005
+      - USER_SERVICE_URL=http://user-service:3002
+    depends_on:
+      - mongodb
+      - redis
+      - rabbitmq
+    networks:
+      - mediflow-network
+    restart: unless-stopped
+
+  ai-service:
+    build:
+      context: ./services/ai-service
+      dockerfile: Dockerfile
+    container_name: mediflow-ai
+    ports:
+      - "3005:3005"
+    environment:
+      - NODE_ENV=production
+      - PORT=3005
+      - REDIS_URL=redis://:mediflow_redis@redis:6379
+      - RABBITMQ_URL=amqp://mediflow:mediflow_rabbit@rabbitmq:5672
+      - AUTH_SERVICE_URL=http://auth-service:3001
+      - HUGGINGFACE_API_KEY=${HUGGINGFACE_API_KEY}
+    depends_on:
+      - redis
+      - rabbitmq
+    networks:
+      - mediflow-network
+    restart: unless-stopped
+
+  notification-service:
+    build:
+      context: ./services/notification-service
+      dockerfile: Dockerfile
+    container_name: mediflow-notification
+    ports:
+      - "3006:3006"
+    environment:
+      - NODE_ENV=production
+      - PORT=3006
+      - MONGO_URI=mongodb+srv://Kadircnkya:A.kadir2838@medtech-db.goyjlv1.mongodb.net/notification_db?retryWrites=true&w=majority&appName=medtech-db
+      - REDIS_URL=redis://:mediflow_redis@redis:6379
+      - RABBITMQ_URL=amqp://mediflow:mediflow_rabbit@rabbitmq:5672
+      - AUTH_SERVICE_URL=http://auth-service:3001
+    depends_on:
+      - mongodb
+      - redis
+      - rabbitmq
+    networks:
+      - mediflow-network
+    restart: unless-stopped
+
+  tracking-service:
+    build:
+      context: ./services/tracking-service
+      dockerfile: Dockerfile
+    container_name: mediflow-tracking
+    ports:
+      - "3007:3007"
+    environment:
+      - NODE_ENV=production
+      - PORT=3007
+      - MONGO_URI=mongodb+srv://Kadircnkya:A.kadir2838@medtech-db.goyjlv1.mongodb.net/tracking_db?retryWrites=true&w=majority&appName=medtech-db
+      - REDIS_URL=redis://:mediflow_redis@redis:6379
+      - RABBITMQ_URL=amqp://mediflow:mediflow_rabbit@rabbitmq:5672
+      - AUTH_SERVICE_URL=http://auth-service:3001
+    depends_on:
+      - mongodb
+      - redis
+      - rabbitmq
+    networks:
+      - mediflow-network
+    restart: unless-stopped
+
+  search-service:
+    build:
+      context: ./services/search-service
+      dockerfile: Dockerfile
+    container_name: mediflow-search
+    ports:
+      - "3008:3008"
+    environment:
+      - NODE_ENV=production
+      - PORT=3008
+      - REDIS_URL=redis://:mediflow_redis@redis:6379
+      - RABBITMQ_URL=amqp://mediflow:mediflow_rabbit@rabbitmq:5672
+      - ELASTICSEARCH_URL=http://elasticsearch:9200
+      - AUTH_SERVICE_URL=http://auth-service:3001
+    depends_on:
+      - elasticsearch
+      - redis
+      - rabbitmq
+    networks:
+      - mediflow-network
+    restart: unless-stopped
+
+  patient-service:
+    build:
+      context: ./services/patient-service
+      dockerfile: Dockerfile
+    container_name: mediflow-patient
+    ports:
+      - "3009:3009"
+    environment:
+      - NODE_ENV=production
+      - PORT=3009
+      - MONGO_URI=mongodb+srv://Kadircnkya:A.kadir2838@medtech-db.goyjlv1.mongodb.net/patient_db?retryWrites=true&w=majority&appName=medtech-db
+      - JWT_SECRET=mediflow_jwt_secret_key_change_in_production
+      - RATE_LIMIT_WINDOW_MS=900000
+      - RATE_LIMIT_MAX_REQUESTS=100
+      - CORS_ORIGIN=*
+      - LOG_LEVEL=info
+    depends_on:
+      - mongodb
+    networks:
+      - mediflow-network
+    restart: unless-stopped
+
+networks:
+  mediflow-network:
+    driver: bridge
+
+volumes:
+  mongodb_data:
+  redis_data:
+  rabbitmq_data:
+  elasticsearch_data:
+  qdrant_data:
